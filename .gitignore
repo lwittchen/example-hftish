@@ -1,5 +1,6 @@
 __pycache__
 .envrc
+.config
 .zipline
 .pyversion
 .vscode
@@ -7,3 +8,4 @@ __pycache__
 .python-version
 .pytest_cache
 algo-state.pkl
+venv
