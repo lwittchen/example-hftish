@@ -1,10 +1,17 @@
+#### original hftish example provided by alpaca
+#### \\link
+
 import argparse
+import os
+import sys
 import pandas as pd
 import numpy as np
 import alpaca_trade_api as tradeapi
 
+sys.path.append('.')
+import config as cfg
 
-class Quote():
+class Quote:
     """
     We use Quote objects to represent the bid/ask spread. When we encounter a
     'level change', a move of exactly 1 penny, we may attempt to make one
@@ -43,7 +50,7 @@ class Quote():
         if (
             self.bid != data.bidprice
             and self.ask != data.askprice
-            and round(data.askprice - data.bidprice, 2) == .01
+            and round(data.askprice - data.bidprice, 2) == 0.01
         ):
             # Update bids and asks and time of level change
             self.prev_bid = self.bid
@@ -55,8 +62,14 @@ class Quote():
             self.prev_spread = round(self.prev_ask - self.prev_bid, 3)
             self.spread = round(self.ask - self.bid, 3)
             print(
-                'Level change:', self.prev_bid, self.prev_ask,
-                self.prev_spread, self.bid, self.ask, self.spread, flush=True
+                "Level change:",
+                self.prev_bid,
+                self.prev_ask,
+                self.prev_spread,
+                self.bid,
+                self.ask,
+                self.spread,
+                flush=True,
             )
             # If change is from one penny spread level to a different penny
             # spread level, then initialize for new level (reset stale vars)
@@ -64,7 +77,7 @@ class Quote():
                 self.reset()
 
 
-class Position():
+class Position:
     """
     The position object is used to track how many shares we have. We need to
     keep track of this so our position size doesn't inflate beyond the level
@@ -88,7 +101,7 @@ class Position():
     def update_filled_amount(self, order_id, new_amount, side):
         old_amount = self.orders_filled_amount[order_id]
         if new_amount > old_amount:
-            if side == 'buy':
+            if side == "buy":
                 self.update_pending_buy_shares(old_amount - new_amount)
                 self.update_total_shares(new_amount - old_amount)
             else:
@@ -98,7 +111,7 @@ class Position():
 
     def remove_pending_order(self, order_id, side):
         old_amount = self.orders_filled_amount[order_id]
-        if side == 'buy':
+        if side == "buy":
             self.update_pending_buy_shares(old_amount - 100)
         else:
             self.update_pending_sell_shares(old_amount - 100)
@@ -108,46 +121,40 @@ class Position():
         self.total_shares += quantity
 
 
-def run(args):
-    symbol = args.symbol
-    max_shares = args.quantity
-    opts = {}
-    if args.key_id:
-        opts['key_id'] = args.key_id
-    if args.secret_key:
-        opts['secret_key'] = args.secret_key
-    if args.base_url:
-        opts['base_url'] = args.base_url
-    elif 'key_id' in opts and opts['key_id'].startswith('PK'):
-        opts['base_url'] = 'https://paper-api.alpaca.markets'
+def run():
+    symbol = 'SNAP'
+    max_shares = 500
+    opts = dict(
+        base_url="https://paper-api.alpaca.markets",
+        **cfg.keys
+    )
     # Create an API object which can be used to submit orders, etc.
     api = tradeapi.REST(**opts)
 
     symbol = symbol.upper()
     quote = Quote()
-    qc = 'Q.%s' % symbol
-    tc = 'T.%s' % symbol
+    qc = "Q.%s" % symbol
+    tc = "T.%s" % symbol
     position = Position()
 
     # Establish streaming connection
+    print(opts)
+    print(qc)
+    print(tc)
     conn = tradeapi.StreamConn(**opts)
 
     # Define our message handling
-    @conn.on(r'Q$')
+    @conn.on(r"Q.*$")
     async def on_quote(conn, channel, data):
         # Quote update received
         quote.update(data)
 
-    @conn.on(r'T$')
+    @conn.on(r"T.*$")
     async def on_trade(conn, channel, data):
         if quote.traded:
             return
         # We've received a trade and might be ready to follow it
-        if (
-            data.timestamp <= (
-                quote.time + pd.Timedelta(np.timedelta64(50, 'ms'))
-            )
-        ):
+        if data.timestamp <= (quote.time + pd.Timedelta(np.timedelta64(50, "ms"))):
             # The trade came too close to the quote update
             # and may have been for the previous level
             return
@@ -160,102 +167,71 @@ def run(args):
             if (
                 data.price == quote.ask
                 and quote.bid_size > (quote.ask_size * 1.8)
-                and (
-                    position.total_shares + position.pending_buy_shares
-                ) < max_shares - 100
+                and (position.total_shares + position.pending_buy_shares)
+                < max_shares - 100
             ):
                 # Everything looks right, so we submit our buy at the ask
                 try:
                     o = api.submit_order(
-                        symbol=symbol, qty='100', side='buy',
-                        type='limit', time_in_force='day',
-                        limit_price=str(quote.ask)
+                        symbol=symbol,
+                        qty="100",
+                        side="buy",
+                        type="limit",
+                        time_in_force="day",
+                        limit_price=str(quote.ask),
                     )
                     # Approximate an IOC order by immediately cancelling
                     api.cancel_order(o.id)
                     position.update_pending_buy_shares(100)
                     position.orders_filled_amount[o.id] = 0
-                    print('Buy at', quote.ask, flush=True)
+                    print("Buy at", quote.ask, flush=True)
                     quote.traded = True
                 except Exception as e:
                     print(e)
             elif (
                 data.price == quote.bid
                 and quote.ask_size > (quote.bid_size * 1.8)
-                and (
-                    position.total_shares - position.pending_sell_shares
-                ) >= 100
+                and (position.total_shares - position.pending_sell_shares) >= 100
             ):
                 # Everything looks right, so we submit our sell at the bid
                 try:
                     o = api.submit_order(
-                        symbol=symbol, qty='100', side='sell',
-                        type='limit', time_in_force='day',
-                        limit_price=str(quote.bid)
+                        symbol=symbol,
+                        qty="100",
+                        side="sell",
+                        type="limit",
+                        time_in_force="day",
+                        limit_price=str(quote.bid),
                     )
                     # Approximate an IOC order by immediately cancelling
                     api.cancel_order(o.id)
                     position.update_pending_sell_shares(100)
                     position.orders_filled_amount[o.id] = 0
-                    print('Sell at', quote.bid, flush=True)
+                    print("Sell at", quote.bid, flush=True)
                     quote.traded = True
                 except Exception as e:
                     print(e)
 
-    @conn.on(r'trade_updates')
+    @conn.on(r"trade_updates")
     async def on_trade_updates(conn, channel, data):
         # We got an update on one of the orders we submitted. We need to
         # update our position with the new information.
         event = data.event
-        if event == 'fill':
-            if data.order['side'] == 'buy':
-                position.update_total_shares(
-                    int(data.order['filled_qty'])
-                )
+        if event == "fill":
+            if data.order["side"] == "buy":
+                position.update_total_shares(int(data.order["filled_qty"]))
             else:
-                position.update_total_shares(
-                    -1 * int(data.order['filled_qty'])
-                )
-            position.remove_pending_order(
-                data.order['id'], data.order['side']
-            )
-        elif event == 'partial_fill':
+                position.update_total_shares(-1 * int(data.order["filled_qty"]))
+            position.remove_pending_order(data.order["id"], data.order["side"])
+        elif event == "partial_fill":
             position.update_filled_amount(
-                data.order['id'], int(data.order['filled_qty']),
-                data.order['side']
+                data.order["id"], int(data.order["filled_qty"]), data.order["side"]
             )
-        elif event == 'canceled' or event == 'rejected':
-            position.remove_pending_order(
-                data.order['id'], data.order['side']
-            )
+        elif event == "canceled" or event == "rejected":
+            position.remove_pending_order(data.order["id"], data.order["side"])
 
-    conn.run(
-        ['trade_updates', tc, qc]
-    )
+    conn.run(["trade_updates", tc, qc])
 
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        '--symbol', type=str, default='SNAP',
-        help='Symbol you want to trade.'
-    )
-    parser.add_argument(
-        '--quantity', type=int, default=500,
-        help='Maximum number of shares to hold at once. Minimum 100.'
-    )
-    parser.add_argument(
-        '--key-id', type=str, default=None,
-        help='API key ID',
-    )
-    parser.add_argument(
-        '--secret-key', type=str, default=None,
-        help='API secret key',
-    )
-    parser.add_argument(
-        '--base-url', type=str, default=None,
-        help='set https://paper-api.alpaca.markets if paper trading',
-    )
-    args = parser.parse_args()
-    assert args.quantity >= 100
-    run(args)
+if __name__ == "__main__":
+    run()
