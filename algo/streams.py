@@ -10,13 +10,41 @@ def process_quote(channel: str, data: tradeapi.entity.Quote, old_quote: Quote):
     """
     logger.info('Update Quote')
     old_quote.update(data=data)
+    breakpoint()
 
 
 def process_trade(channel: str, data: tradeapi.entity.Trade):
     """
     ...
     """
-    raise NotImplementedError
+    if (
+        data.size > 100
+        and data.price == quote.ask
+        and quote.bid_size > (quote.ask_size * 1.5)
+    ):
+        # post buy order
+        try:
+            o = api.submit_order(
+                symbol=symbol,
+                qty="100",
+                side="buy",
+                type="limit",
+                time_in_force="day",
+                limit_price=str(quote.ask),
+            )
+            # Approximate an IOC order by immediately cancelling
+            api.cancel_order(o.id)
+            position.register_pending_order(100)
+            print("Buy at", quote.ask, flush=True)
+        except Exception as e:
+            print(e)
+    elif (
+        data.size > 100
+        and data.price == quote.bid
+        and quote.ask_size > (quote.bid_size * 1.5)
+    ):
+        # post sell order
+
 
 
 def process_order(channel: str, data: tradeapi.entity.Entity, position: Position):
